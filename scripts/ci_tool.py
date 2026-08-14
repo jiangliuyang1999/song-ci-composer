@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import random
 import re
 import sys
 import unicodedata
@@ -203,6 +204,73 @@ SEASONAL_CONTEXTS = {
     ],
 }
 
+FESTIVAL_CONTEXTS = [
+    {
+        "name": "除夕",
+        "month_start": 1, "day_start": 21,
+        "month_end": 2, "day_end": 9,
+        "probability": 0.5,
+        "scene": "除夕高楼灯火连城，寒星欲曙，远山渐露青痕",
+        "theme": "除夕登楼守岁，由万家灯火写怀远、流年与新岁愿景",
+    },
+    {
+        "name": "春节",
+        "month_start": 1, "day_start": 21,
+        "month_end": 2, "day_end": 20,
+        "probability": 0.6,
+        "scene": "爆竹声中旧岁除，东风送暖，梅梢初破新红",
+        "theme": "新春元日感怀，由东风梅信写辞旧迎新与襟抱开豁",
+    },
+    {
+        "name": "元宵",
+        "month_start": 2, "day_start": 5,
+        "month_end": 3, "day_end": 7,
+        "probability": 0.5,
+        "scene": "上元灯市如昼，火树银花，月满高楼人影参差",
+        "theme": "元宵观灯对月，以火树清辉写团圆之愿与春夜清欢",
+    },
+    {
+        "name": "清明",
+        "month_start": 4, "day_start": 3,
+        "month_end": 4, "day_end": 6,
+        "probability": 0.6,
+        "scene": "清明微雨湿花，行人散入远山，纸灰飞作白蝶",
+        "theme": "清明雨中扫墓踏青，由芳草纸灰追忆故人，写生死与春思",
+    },
+    {
+        "name": "端午",
+        "month_start": 5, "day_start": 28,
+        "month_end": 6, "day_end": 28,
+        "probability": 0.5,
+        "scene": "端午江上鼓声震水，彩舟竞渡，古祠烟树苍茫",
+        "theme": "端午临江观竞渡并怀古，由鼓角江山写忠愤与兴亡之思",
+    },
+    {
+        "name": "七夕",
+        "month_start": 8, "day_start": 1,
+        "month_end": 8, "day_end": 31,
+        "probability": 0.4,
+        "scene": "七夕星汉清浅，鹊桥横空，人间小楼独对银烛",
+        "theme": "七夕望星河感怀，以鹊桥银汉写相思、离别与天上人间",
+    },
+    {
+        "name": "中秋",
+        "month_start": 9, "day_start": 8,
+        "month_end": 10, "day_end": 8,
+        "probability": 0.6,
+        "scene": "中秋月满高台，银汉无声，远近人家灯火相望",
+        "theme": "中秋登台问月，以清辉天涯写怀远、团圆之愿与旷达襟抱",
+    },
+    {
+        "name": "重阳",
+        "month_start": 10, "day_start": 1,
+        "month_end": 10, "day_end": 31,
+        "probability": 0.5,
+        "scene": "重阳山路菊香满袖，登高回首，古城隐入暮云",
+        "theme": "重阳登高怀古，由秋山古城写岁月兴亡与江山之感",
+    },
+]
+
 CIPAI_RECOMMENDATIONS = [
     {
         "cipai": "念奴娇",
@@ -363,12 +431,70 @@ def current_season(today: date | None = None) -> str:
     return "冬"
 
 
+def _in_date_range(month: int, day: int, start_month: int, start_day: int, end_month: int, end_day: int) -> bool:
+    """判断 (month, day) 是否在 [start, end] 日期区间内，支持跨年区间。"""
+    if start_month <= end_month:
+        if month < start_month or month > end_month:
+            return False
+        if month == start_month and day < start_day:
+            return False
+        if month == end_month and day > end_day:
+            return False
+        return True
+    else:
+        if end_month < month < start_month:
+            return False
+        if month == start_month and day < start_day:
+            return False
+        if month == end_month and day > end_day:
+            return False
+        return True
+
+
+def check_festival(today: date) -> dict[str, Any] | None:
+    """若当前日期落在某个传统节日的近似公历区间内，按概率返回该节日信息。"""
+    matched = [
+        festival
+        for festival in FESTIVAL_CONTEXTS
+        if _in_date_range(today.month, today.day, festival["month_start"], festival["day_start"], festival["month_end"], festival["day_end"])
+    ]
+    if not matched:
+        return None
+    roll = random.random()
+    for festival in matched:
+        if roll < festival["probability"]:
+            return {
+                "name": festival["name"],
+                "scene": festival["scene"],
+                "theme": festival["theme"],
+                "probability": festival["probability"],
+                "roll": round(roll, 4),
+            }
+    return None
+
+
 def seasonal_theme(today: date | None = None) -> dict[str, Any]:
     current = today or date.today()
     season = current_season(current)
     candidates = SEASONAL_CONTEXTS[season]
-    selected_index = (current.day - 1) % len(candidates)
-    selected = candidates[selected_index]
+    selected = random.choice(candidates)
+    selected_index = candidates.index(selected)
+
+    festival = check_festival(current)
+    if festival:
+        return {
+            "date": current.isoformat(),
+            "season": season,
+            "scene": festival["scene"],
+            "theme": festival["theme"],
+            "festival": festival["name"],
+            "festivalProbability": festival["probability"],
+            "festivalRoll": festival["roll"],
+            "selectedIndex": selected_index + 1,
+            "candidates": candidates,
+            "basis": f"当前日期处于{festival['name']}的公历近似区间，以概率 {festival['probability']} 命中节日主题；否则回退为当季随机候选",
+        }
+
     return {
         "date": current.isoformat(),
         "season": season,
@@ -376,7 +502,7 @@ def seasonal_theme(today: date | None = None) -> dict[str, Any]:
         "theme": selected["theme"],
         "selectedIndex": selected_index + 1,
         "candidates": candidates,
-        "basis": "按公历月份近似古典四时，并按日期在当季候选中稳定轮换：二至四月为春、五至七月为夏、八至十月为秋、十一月至次年一月为冬",
+        "basis": "按公历月份近似古典四时，在当季候选中随机选取一组场景和主题：二至四月为春、五至七月为夏、八至十月为秋、十一月至次年一月为冬",
     }
 
 
