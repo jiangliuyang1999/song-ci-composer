@@ -519,15 +519,15 @@ def recommend_cipai(theme: str) -> dict[str, Any]:
             candidates.append((score, -order, rule, matched))
     if not candidates:
         return {
-            "value": "浣溪沙",
+            "value": random.choice(["浣溪沙", "临江仙", "鹧鸪天", "蝶恋花"]),
             "matchedKeywords": [],
-            "reason": "主题未命中特定题材规则，采用篇制均衡、适配题材较广的《浣溪沙》",
+            "reason": "主题未命中特定题材规则，从适配题材较广的词牌中随机选择",
         }
-    _, _, selected, matched = max(candidates, key=lambda item: (item[0], item[1]))
+    _, _, selected, matched = random.choices(candidates, weights=[item[0] for item in candidates], k=1)[0]
     return {
         "value": selected["cipai"],
         "matchedKeywords": matched,
-        "reason": selected["reason"],
+        "reason": selected["reason"] + "；在匹配候选中按适配分数加权抽取",
     }
 
 
@@ -541,17 +541,17 @@ def recommend_poet(theme: str, cipai: str) -> dict[str, Any]:
             candidates.append((score, -order, rule, matched, bool(cipai_score)))
     if not candidates:
         return {
-            "value": "晏殊",
+            "value": random.choice(["晏殊", "欧阳修", "苏轼", "李清照"]),
             "matchedKeywords": [],
             "matchedCipai": False,
-            "reason": "主题与词牌未命中特定风格规则，采用温润圆融、题材适应面较广的晏殊风格",
+            "reason": "主题与词牌未命中特定风格规则，从多种常见风格中随机选择",
         }
-    _, _, selected, matched, matched_cipai = max(candidates, key=lambda item: (item[0], item[1]))
+    _, _, selected, matched, matched_cipai = random.choices(candidates, weights=[item[0] for item in candidates], k=1)[0]
     return {
         "value": selected["poet"],
         "matchedKeywords": matched,
         "matchedCipai": matched_cipai,
-        "reason": selected["reason"],
+        "reason": selected["reason"] + "；在匹配候选中按适配分数加权抽取",
     }
 
 
@@ -1137,7 +1137,28 @@ def rhyme_bank(rhyme_data: dict[str, Any], group_id: str, tone: str | None, limi
     return result
 
 
+# These are compositional prompts, not mandatory content or a vocabulary bank.
+EXPLORATION_AXES = {
+    "entry": ["从动作中途入篇", "从声音或触感入篇", "从对话或问语入篇", "从一件事的余波入篇", "从具体物件的变化入篇", "从开阔场面入篇"],
+    "perspective": ["亲历者当下所见", "遥想另一人的处境", "旁观者见微知著", "今昔交错但保留线索", "以物的遭际映照人事", "面向某人或某物倾诉"],
+    "movement": ["循一件小事推进", "由近及远展开", "先果后因逐层揭示", "让两种情境相互映照", "由外部热闹收向内心", "由静观转入行动"],
+    "emotion": ["喜悦中有不舍", "迟疑渐成决断", "平静之下暗藏波澜", "诙谐中见认真", "期待与现实相抵", "从困惑走向体谅"],
+    "ending": ["以动作未尽收束", "以具体发现收束", "以含蓄反问收束", "用冷笔轻轻翻转", "让视野向外延伸", "回照开篇而改变其意味"],
+}
+
+
+def composition_exploration() -> dict[str, Any]:
+    # Sample without replacement within each axis so the three briefs differ.
+    draws = {axis: random.sample(options, 3) for axis, options in EXPLORATION_AXES.items()}
+    return {
+        "briefs": [{axis: values[i] for axis, values in draws.items()} for i in range(3)],
+        "guidance": "将三组提示转化为贴合主题的不同构思，舍弃冲突组合；可另创路径，不机械拼装。对照当前可见作品避重复，再择一成篇。",
+    }
+
+
 def prepare(args: argparse.Namespace) -> None:
+    if args.seed is not None:
+        random.seed(args.seed)
     cipu, rhyme_data, unihan_data = load_all()
     request, inference = resolve_composition_request(args)
     pattern = select_pattern(cipu, request["cipai"], args.variant, rhyme_data, unihan_data)
@@ -1161,6 +1182,7 @@ def prepare(args: argparse.Namespace) -> None:
             preferred = suggested_groups.get(series, [])
             fallback = compatible_rhyme_groups(rhyme_data, tones[series])
             group_ids = list(dict.fromkeys([*preferred, *fallback]))
+            random.shuffle(group_ids)
         candidate_groups[series] = group_ids
 
     selected_groups = select_nonadjacent_rhyme_groups(series_order, candidate_groups)
@@ -1197,6 +1219,7 @@ def prepare(args: argparse.Namespace) -> None:
     payload = {
         "request": request,
         "inference": inference,
+        "exploration": composition_exploration(),
         "pattern": {
             "id": pattern["id"],
             "name": pattern["name"],
@@ -1219,15 +1242,16 @@ def prepare(args: argparse.Namespace) -> None:
         "rhymeBanks": banks,
         "compatibilityIssues": compatibility_issues,
         "generationChecklist": [
-            "先按行数、每句字数和平仄骨架拟句，再润色意象与章法",
+            "先探索不同构思、建立自然文意，再按词谱填词；随机提示不得覆盖用户要求",
             "同一 rhyme_series 的句末字须落在同一《词林正韵》韵部",
             "不同韵系可以复用韵部，但相邻 rhyme_series 不得使用同一韵部",
-            "韵部字优先只用于韵脚；非韵脚位置尽量避开各韵系所用韵部",
+            "韵脚句尾必须押韵；非韵脚句尾必须避开各韵系所用韵部，指定现代韵母时也须避开该韵母",
+            "非韵脚句尾任一候选读音同部即报错，读音缺失时不得判为通过；句中用字尽量避开所押韵部",
             "除叠字、叠词外尽量避免重复用字，尤其不得重复使用同一韵脚字",
             "平韵、仄韵按 rhyme_tone 分别满足；中位可平可仄",
-            "主题须形成起承转合，避免只堆砌关键词",
+            "章法随篇意变化，不固定套用写景、怀人、旷达的顺序",
             "模仿指定词人的意象、句法、语气与用典密度，不照抄名句",
-            "生成后运行 validate，未通过则逐字修改并复验",
+            "生成后独立审查文意并运行 validate；修律优先调整短语或整句，再复核语脉",
         ],
     }
     print(json.dumps(payload, ensure_ascii=False, indent=2))
@@ -1284,6 +1308,7 @@ def validate(args: argparse.Namespace) -> None:
         errors.append({"type": "line_count", "expected": len(rows), "actual": len(lines), "message": "句数与词谱不符"})
 
     series_endings: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    non_rhyme_endings: list[dict[str, Any]] = []
     pattern_lines = [line for section in pattern["sections"] for line in section["lines"]]
     for index, (actual, row, line_spec) in enumerate(zip(lines, rows, pattern_lines), start=1):
         line_check: dict[str, Any] = {"line": index, "text": actual, "expectedLength": row["length"], "expectedTones": row["tones"], "issues": []}
@@ -1328,6 +1353,19 @@ def validate(args: argparse.Namespace) -> None:
                     "reduplicationExempt": len(actual) - 1 in reduplication_indexes(actual),
                 }
             )
+        elif actual and series_order:
+            char = actual[-1]
+            readings = cilin_readings(char, rhyme_data["characters"], unihan_data["characters"])
+            non_rhyme_endings.append(
+                {
+                    "line": index,
+                    "position": len(actual),
+                    "char": char,
+                    "readings": readings,
+                    "groups": {x["rhymeGroup"] for x in readings},
+                    "modernFinals": modern_finals(char, unihan_data["characters"]),
+                }
+            )
         checks.append(line_check)
 
     actual_group_candidates: dict[str, list[str]] = {}
@@ -1366,10 +1404,79 @@ def validate(args: argparse.Namespace) -> None:
             }
         )
         selected_groups = {}
+    elif non_rhyme_endings:
+        # 多音韵脚可归入多个韵部时，优先选择同时满足句尾避韵的组合。
+        forbidden_groups = set().union(*(ending["groups"] for ending in non_rhyme_endings))
+        safe_candidates = {
+            series: [group for group in options if group not in forbidden_groups]
+            for series, options in actual_group_candidates.items()
+        }
+        # 选择器会跳过空候选，不能让避韵过滤清空已有韵系后误判通过。
+        if all(not options or safe_candidates[series] for series, options in actual_group_candidates.items()):
+            safe_selected = select_nonadjacent_rhyme_groups(series_order, safe_candidates)
+            if safe_selected is not None:
+                selected_groups = safe_selected
     resolved_series_groups = {
         series: {group_id}
         for series, group_id in selected_groups.items()
     }
+
+    modern_constraints = {
+        series: constraint["modern_final"]
+        for series, constraint in constraints.items()
+        if constraint["mode"] == "modern-final"
+    }
+    for ending in non_rhyme_endings:
+        ending_issues: list[dict[str, Any]] = []
+        if not ending["readings"]:
+            ending_issues.append(
+                {
+                    "type": "unknown_non_rhyme_ending",
+                    "source": "词林正韵",
+                    "message": "非韵脚句尾无法在《词林正韵》中定位，不能确认已避开所押韵部",
+                }
+            )
+        matched_series = [
+            series for series, groups in resolved_series_groups.items()
+            if ending["groups"] & groups
+        ]
+        if matched_series:
+            matched_groups = {selected_groups[series] for series in matched_series}
+            ending_issues.append(
+                {
+                    "type": "non_rhyme_ending_same_group",
+                    "series": matched_series,
+                    "rhymeGroups": sorted(matched_groups),
+                    "matchedReadings": [
+                        {"group": reading["rhymeGroup"], "section": reading["section"], "tone": tone_symbol(reading["tone"])}
+                        for reading in ending["readings"]
+                        if reading["rhymeGroup"] in matched_groups
+                    ],
+                    "message": "非韵脚句尾使用了所押韵部字；任一候选读音同部即不通过，须换用其他韵部字",
+                }
+            )
+        if modern_constraints and not ending["modernFinals"]:
+            ending_issues.append(
+                {
+                    "type": "unknown_non_rhyme_ending",
+                    "source": "现代普通话",
+                    "message": "非韵脚句尾缺少现代读音，不能确认已避开指定韵母",
+                }
+            )
+        for series, final in modern_constraints.items():
+            if final in ending["modernFinals"]:
+                ending_issues.append(
+                    {
+                        "type": "non_rhyme_ending_modern_final",
+                        "series": series,
+                        "forbiddenFinal": final,
+                        "message": "非韵脚句尾含有指定现代韵母的读音，须换用其他韵母字",
+                    }
+                )
+        for issue in ending_issues:
+            issue.update({key: ending[key] for key in ("line", "position", "char")})
+            errors.append(issue)
+            checks[ending["line"] - 1]["issues"].append(issue)
 
     for series, endings in series_endings.items():
         repeated_endings: dict[str, list[int]] = defaultdict(list)
@@ -1394,7 +1501,7 @@ def validate(args: argparse.Namespace) -> None:
         occurrences: list[dict[str, Any]] = []
         for line_number, (line_text, line_spec) in enumerate(zip(lines, pattern_lines), start=1):
             for position, (char, pos_spec) in enumerate(zip(line_text, line_spec["positions"]), start=1):
-                if rhyme_series(pos_spec):
+                if rhyme_series(pos_spec) or position == len(line_text):
                     continue
                 readings = cilin_readings(char, rhyme_data["characters"], unihan_data["characters"])
                 matched = [
@@ -1422,7 +1529,7 @@ def validate(args: argparse.Namespace) -> None:
                     "series": series,
                     "rhymeGroups": sorted(groups),
                     "occurrences": occurrences,
-                    "message": "非韵脚位置使用了本韵系同韵部字；建议优先换用其他韵部字，多音字可结合语义核定",
+                    "message": "句中非韵脚位置使用了所押韵部字；建议优先换用其他韵部字，多音字可结合语义核定",
                 }
             )
 
@@ -1453,7 +1560,7 @@ def validate(args: argparse.Namespace) -> None:
         "rhymeEndings": series_endings,
         "rhymeConstraints": constraints,
         "selectedRhymeGroups": selected_groups,
-        "note": "本工具确定性校验字数、平仄、分组押韵及相邻韵系换部，并提示非韵脚同韵部字与重复用字；多音字语境、主题贴合度、词人风格和语义质量仍需人工或模型复核。",
+        "note": "本工具确定性校验字数、平仄、分组押韵、相邻韵系换部及非韵脚句尾避韵，并提示句中同韵部字与重复用字；非韵脚句尾任一候选读音同部或符合指定现代韵母即报错，读音缺失也不通过；多音字语境、主题贴合度、词人风格和语义质量仍需人工或模型复核。",
     }
     print(json.dumps(result, ensure_ascii=False, indent=2))
     raise SystemExit(0 if result["passed"] else 2)
@@ -1476,6 +1583,7 @@ def build_parser() -> argparse.ArgumentParser:
     prepare_rhyme.add_argument("--rhyme", help="单韵系词牌的韵部、韵目、指定韵脚字或现代拼音韵母")
     prepare_rhyme.add_argument("--rhymes", help='多韵系约束，如 "rhyme-1=第三部;rhyme-2=第七部"')
     p_prepare.add_argument("--bank-limit", type=int, default=80, help="每个韵目最多展示的候选字数")
+    p_prepare.add_argument("--seed", type=int, help="复现约束抽样与构思提示；不保证模型正文复现，日常创作省略")
     p_prepare.set_defaults(func=prepare)
 
     p_rhyme = sub.add_parser("rhyme", help="查询韵部或韵脚候选")
